@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+	 viewBox="225 105 915 345">
+<path fill="none" stroke="#003E74" stroke-width="28" stroke-miterlimit="10" d="M386.535,271.352
+	c-31.828,31.828-83.431,31.827-115.258-0.001c-31.828-31.828-31.828-83.429,0-115.257c31.827-31.829,83.43-31.829,115.258,0
+	c8.061,8.061,14.08,17.39,18.058,27.345"/>
+<path fill="none" stroke="#003E74" stroke-width="28" stroke-miterlimit="10" d="M386.396,271.466
+	c31.828-31.828,83.43-31.826,115.258,0.002s31.828,83.43,0,115.258s-83.43,31.828-115.258,0
+	c-8.061-8.061-14.08-17.389-18.058-27.346"/>
+<line fill="none" stroke="#CC0033" stroke-width="25" stroke-miterlimit="10" x1="341.352" y1="234.641" x2="398.852" y2="234.641"/>
+<line fill="none" stroke="#CC0033" stroke-width="25" stroke-miterlimit="10" x1="386.352" y1="222.769" x2="386.352" y2="321.141"/>
+<line fill="none" stroke="#CC0033" stroke-width="25" stroke-miterlimit="10" x1="373.852" y1="309.141" x2="431.352" y2="309.141"/>
+<text transform="matrix(1 0 0 1 547.6494 238.6401)"><tspan x="0" y="0" fill="#003E74" font-family="'CenturyGothic','Century Gothic','Futura','Avenir Next','Trebuchet MS',sans-serif" font-size="140">Gormley</tspan><tspan x="144" y="168" fill="#003E74" font-family="'CenturyGothic','Century Gothic','Futura','Avenir Next','Trebuchet MS',sans-serif" font-size="140">Lab</tspan></text>
+</svg>
