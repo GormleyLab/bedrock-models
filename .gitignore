@@ -1,0 +1,15 @@
+# Environment / secrets
+.env
+.venv/
+
+# Local data (chat history DB + uploaded files)
+data/
+public/uploads/
+
+# Chainlit runtime artifacts
+.chainlit/translations/
+.files/
+
+# Python
+__pycache__/
+*.pyc

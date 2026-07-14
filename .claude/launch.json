@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bedrock-chat",
+      "runtimeExecutable": ".venv\\Scripts\\chainlit",
+      "runtimeArgs": ["run", "app.py", "--headless"],
+      "port": 8000
+    }
+  ]
+}
