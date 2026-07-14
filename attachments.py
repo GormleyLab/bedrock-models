@@ -142,11 +142,15 @@ def materialize_messages(
     """
     messages: List[Dict[str, Any]] = []
     for turn in history:
+        # Attachments go before text: Bedrock rejects cachePoint blocks placed
+        # directly after a document block, and models follow instructions
+        # better when the question comes after the documents anyway
         blocks: List[Dict[str, Any]] = []
+        text_blocks: List[Dict[str, Any]] = []
         for block in turn["content"]:
             if "text" in block:
                 if block["text"]:
-                    blocks.append({"text": block["text"]})
+                    text_blocks.append({"text": block["text"]})
             elif "image_ref" in block:
                 ref = block["image_ref"]
                 if include_images and Path(ref["path"]).exists():
@@ -170,6 +174,7 @@ def materialize_messages(
                     })
                 else:
                     blocks.append({"text": f"[document '{ref['name']}' was omitted]"})
+        blocks.extend(text_blocks)
         if not blocks:
             blocks = [{"text": "(empty message)"}]
         # A document block requires an accompanying text block

@@ -236,8 +236,13 @@ def apply_cache_point(model: ModelInfo, messages: List[Dict[str, Any]]) -> bool:
         return False
     if not messages or estimate_tokens(messages) < CACHE_MIN_TOKENS:
         return False
-    messages[-1]["content"].append({"cachePoint": {"type": "default"}})
-    return True
+    # Bedrock rejects a cachePoint directly after a document/image block, so
+    # anchor it to the most recent message that ends with a text block
+    for msg in reversed(messages):
+        if msg["content"] and "text" in msg["content"][-1]:
+            msg["content"].append({"cachePoint": {"type": "default"}})
+            return True
+    return False
 
 
 def _build_kwargs(
@@ -262,9 +267,15 @@ def _build_kwargs(
 
 def _call_with_retry(api_call, kwargs: Dict[str, Any]):
     """Call Converse, stripping unsupported request features on rejection."""
+    stripped_cache = False
     for _ in range(3):
         try:
-            return api_call(**kwargs)
+            result = api_call(**kwargs)
+            if stripped_cache:
+                # The retry without cache points succeeded, so they were the
+                # problem — skip caching for this model from now on
+                _no_cache_models.add(kwargs["modelId"])
+            return result
         except Exception as e:
             message = _validation_message(e).lower()
             invoke_id = kwargs["modelId"]
@@ -272,14 +283,21 @@ def _call_with_retry(api_call, kwargs: Dict[str, Any]):
             has_cache = any(
                 "cachePoint" in b for m in kwargs["messages"] for b in m["content"]
             )
-            if "temperature" in message and has_temp:
+            if message and "temperature" in message and has_temp:
                 logger.info("%s rejects temperature; retrying without it", invoke_id)
                 _no_temperature_models.add(invoke_id)
                 kwargs["inferenceConfig"].pop("temperature", None)
-            elif "cache" in message and has_cache:
-                logger.info("%s rejects prompt caching; retrying without it", invoke_id)
-                _no_cache_models.add(invoke_id)
+            elif message and has_cache:
+                # Models without caching support reject cachePoint blocks with
+                # messages that don't always mention caching (e.g.
+                # "messages.0.content.3.type: Field required"), so retry any
+                # validation failure once without the cache points
+                logger.info(
+                    "%s validation error with cache points present (%s); "
+                    "retrying without them", invoke_id, message,
+                )
                 _strip_cache_points(kwargs["messages"])
+                stripped_cache = True
             else:
                 raise
     return api_call(**kwargs)
