@@ -84,7 +84,7 @@ def auth_callback(username: str, password: str) -> Optional[cl.User]:
 # Settings / model picker
 # --------------------------------------------------------------------------
 
-_DEFAULT_MODEL_HINTS = ("claude sonnet", "claude", "nova pro")
+_DEFAULT_MODEL_HINTS = ("claude opus 4.8", "claude sonnet", "claude", "nova pro")
 
 
 def _default_model_index(names: List[str]) -> int:
