@@ -65,6 +65,7 @@ class ModelInfo:
     streaming: bool
     image_input: bool
     document_input: bool
+    prompt_caching: bool = False
 
 
 _catalog: Optional[Dict[str, ModelInfo]] = None
@@ -151,6 +152,9 @@ def build_catalog() -> Dict[str, ModelInfo]:
                 streaming=summary.get("responseStreamingSupported", False),
                 image_input=image_input,
                 document_input=document_input,
+                # Claude models support Converse cachePoint blocks; a runtime
+                # ValidationException fallback covers any that don't
+                prompt_caching=model_id.startswith("anthropic."),
             )
         )
 
@@ -178,21 +182,62 @@ def get_catalog() -> Dict[str, ModelInfo]:
 _DONE = object()
 
 
-# Some newer models (e.g. Claude Opus 4.8) reject `temperature` as
-# deprecated. There's no API to detect this upfront, so on rejection the
-# call is retried without it and the model is remembered for the session.
+# Some models reject request features there's no API to detect upfront —
+# e.g. Claude Opus 4.8 rejects `temperature` as deprecated, and older Claude
+# models may reject cachePoint blocks. On rejection the call is retried
+# without the feature and the model is remembered for the session.
 _no_temperature_models: set = set()
+_no_cache_models: set = set()
+
+# Estimated-token threshold before cache points are added. Below this, either
+# the prefix is under Bedrock's per-model caching minimum (marker silently
+# ignored) or the chat is too small for the 1.25x cache-write premium to pay off.
+CACHE_MIN_TOKENS = 4096
 
 
-def _is_temperature_rejection(e: Exception) -> bool:
+def _validation_message(e: Exception) -> str:
     from botocore.exceptions import ClientError
 
     if not isinstance(e, ClientError):
-        return False
+        return ""
     err = e.response.get("Error", {})
-    return err.get("Code") == "ValidationException" and "temperature" in err.get(
-        "Message", ""
-    ).lower()
+    if err.get("Code") != "ValidationException":
+        return ""
+    return err.get("Message", "")
+
+
+def _strip_cache_points(messages: List[Dict[str, Any]]) -> None:
+    for msg in messages:
+        msg["content"] = [b for b in msg["content"] if "cachePoint" not in b]
+
+
+def estimate_tokens(messages: List[Dict[str, Any]]) -> int:
+    """Rough token estimate of a Converse request, for the caching threshold."""
+    total = 0
+    for msg in messages:
+        for block in msg.get("content", []):
+            if "text" in block:
+                total += len(block["text"]) // 4
+            elif "image" in block:
+                total += len(block["image"]["source"]["bytes"]) // 8
+            elif "document" in block:
+                total += len(block["document"]["source"]["bytes"]) // 8
+    return total
+
+
+def apply_cache_point(model: ModelInfo, messages: List[Dict[str, Any]]) -> bool:
+    """Mark the conversation prefix for prompt caching when worthwhile.
+
+    Appends a cachePoint block to the final message so the whole prefix is
+    cached; on the next turn Bedrock reads the previous checkpoint (within
+    its lookback window) and only processes the new tokens at full price.
+    """
+    if not model.prompt_caching or model.invoke_id in _no_cache_models:
+        return False
+    if not messages or estimate_tokens(messages) < CACHE_MIN_TOKENS:
+        return False
+    messages[-1]["content"].append({"cachePoint": {"type": "default"}})
+    return True
 
 
 def _build_kwargs(
@@ -215,17 +260,29 @@ def _build_kwargs(
     return kwargs
 
 
-def _call_with_temperature_retry(api_call, kwargs: Dict[str, Any]):
-    try:
-        return api_call(**kwargs)
-    except Exception as e:
-        if not _is_temperature_rejection(e):
-            raise
-        invoke_id = kwargs["modelId"]
-        logger.info("%s rejects temperature; retrying without it", invoke_id)
-        _no_temperature_models.add(invoke_id)
-        kwargs["inferenceConfig"].pop("temperature", None)
-        return api_call(**kwargs)
+def _call_with_retry(api_call, kwargs: Dict[str, Any]):
+    """Call Converse, stripping unsupported request features on rejection."""
+    for _ in range(3):
+        try:
+            return api_call(**kwargs)
+        except Exception as e:
+            message = _validation_message(e).lower()
+            invoke_id = kwargs["modelId"]
+            has_temp = "temperature" in kwargs["inferenceConfig"]
+            has_cache = any(
+                "cachePoint" in b for m in kwargs["messages"] for b in m["content"]
+            )
+            if "temperature" in message and has_temp:
+                logger.info("%s rejects temperature; retrying without it", invoke_id)
+                _no_temperature_models.add(invoke_id)
+                kwargs["inferenceConfig"].pop("temperature", None)
+            elif "cache" in message and has_cache:
+                logger.info("%s rejects prompt caching; retrying without it", invoke_id)
+                _no_cache_models.add(invoke_id)
+                _strip_cache_points(kwargs["messages"])
+            else:
+                raise
+    return api_call(**kwargs)
 
 
 async def stream_converse(
@@ -247,7 +304,7 @@ async def stream_converse(
 
     def worker() -> None:
         try:
-            resp = _call_with_temperature_retry(_runtime.converse_stream, kwargs)
+            resp = _call_with_retry(_runtime.converse_stream, kwargs)
             for event in resp["stream"]:
                 loop.call_soon_threadsafe(queue.put_nowait, event)
             loop.call_soon_threadsafe(queue.put_nowait, _DONE)
@@ -274,4 +331,4 @@ async def converse_once(
 ) -> Dict[str, Any]:
     """Non-streaming fallback for models without streaming support."""
     kwargs = _build_kwargs(invoke_id, messages, system_prompt, max_tokens, temperature)
-    return await asyncio.to_thread(_call_with_temperature_retry, _runtime.converse, kwargs)
+    return await asyncio.to_thread(_call_with_retry, _runtime.converse, kwargs)

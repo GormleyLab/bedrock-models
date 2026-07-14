@@ -11,7 +11,10 @@ local disk) except the model API calls to your own AWS account.
   your region appears in the picker, including models that require
   cross-region inference profiles (newer Claude, Nova, Llama, etc.).
 - **Streaming responses** via the Bedrock Converse API, with per-response
-  token usage.
+  token usage and a running session total.
+- **Prompt caching** on Claude models: once a conversation exceeds a few
+  thousand tokens, the re-sent history is cached by Bedrock and billed at
+  ~10% on subsequent turns (shown as "cached" in the usage footer).
 - **Image and document uploads** (PNG/JPEG/GIF/WebP; PDF/Word/Excel/CSV/
   TXT/MD/HTML), gated per-model: the picker tags models with `[img]` / `[doc]`
   and the app warns instead of erroring when a model can't accept a file.
@@ -49,8 +52,10 @@ model in the settings panel (⚙️), and chat.
 - Chat history lives in `data/chainlit.db`; uploaded files in `data/uploads/`
   (model context) and `public/uploads/` (UI display). All are gitignored.
 - Full conversation context — including images/documents — is re-sent to the
-  model on every turn (the Converse API is stateless), so long multimodal
-  threads consume more input tokens.
+  model on every turn (the Converse API is stateless). On Claude models,
+  prompt caching offsets most of that cost; the cache expires after ~5
+  minutes of inactivity, so the first turn after a long pause pays a small
+  (1.25x) cache-write premium again.
 - `AccessDeniedException` on a model means access hasn't been granted yet:
   AWS console → Bedrock → Model access.
 - The `/public/uploads` route is unauthenticated; that's acceptable for a

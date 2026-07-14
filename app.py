@@ -22,7 +22,12 @@ logger = logging.getLogger(__name__)
 DB_PATH = Path("data/chainlit.db")
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
-_USAGE_FOOTER_RE = re.compile(r"\n\n\*tokens: [\d,]+ in / [\d,]+ out\*\s*$")
+# Matches the usage footer appended to assistant replies (any variant)
+_USAGE_FOOTER_RE = re.compile(r"\n\n\*tokens:[^\n]*\*\s*$")
+# Extracts per-turn counts from a footer, for rebuilding session totals
+_USAGE_NUMBERS_RE = re.compile(
+    r"\*tokens: ([\d,]+) in(?: \+ ([\d,]+) cached)? / ([\d,]+) out"
+)
 
 
 # --------------------------------------------------------------------------
@@ -133,6 +138,7 @@ def _current_model() -> "bedrock.ModelInfo":
 @cl.on_chat_start
 async def on_chat_start():
     cl.user_session.set("history", [])
+    cl.user_session.set("token_totals", {"in": 0, "out": 0})
     try:
         await _send_settings()
     except ClientError as e:
@@ -181,6 +187,19 @@ async def on_chat_resume(thread: Dict[str, Any]):
                 text = _USAGE_FOOTER_RE.sub("", text)
                 history.append({"role": "assistant", "content": [{"text": text}]})
         cl.user_session.set("history", history)
+
+    if not cl.user_session.get("token_totals"):
+        # Rebuild session totals from the usage footers of persisted replies
+        totals = {"in": 0, "out": 0}
+        for step in thread.get("steps", []):
+            if step.get("type") != "assistant_message":
+                continue
+            m = _USAGE_NUMBERS_RE.search(step.get("output") or "")
+            if m:
+                totals["in"] += int(m.group(1).replace(",", ""))
+                totals["in"] += int((m.group(2) or "0").replace(",", ""))
+                totals["out"] += int(m.group(3).replace(",", ""))
+        cl.user_session.set("token_totals", totals)
 
     settings = cl.user_session.get("chat_settings") or {}
     try:
@@ -272,6 +291,7 @@ async def on_message(message: cl.Message):
         include_images=model.image_input,
         include_docs=model.document_input,
     )
+    bedrock.apply_cache_point(model, messages)
 
     max_tokens = int(settings.get("max_tokens") or 4096)
     temperature = float(settings.get("temperature") if settings.get("temperature") is not None else 0.5)
@@ -327,8 +347,21 @@ async def on_message(message: cl.Message):
     cl.user_session.set("history", history)
 
     if usage:
+        # Cache reads bill at ~10% of the input rate; cache writes at 1.25x,
+        # so writes are folded into the full-price "in" figure
+        cache_read = usage.get("cacheReadInputTokens", 0) or 0
+        cache_write = usage.get("cacheWriteInputTokens", 0) or 0
+        turn_in = (usage.get("inputTokens", 0) or 0) + cache_write
+        turn_out = usage.get("outputTokens", 0) or 0
+
+        totals = cl.user_session.get("token_totals") or {"in": 0, "out": 0}
+        totals["in"] += turn_in + cache_read
+        totals["out"] += turn_out
+        cl.user_session.set("token_totals", totals)
+
+        cached_part = f" + {cache_read:,} cached" if cache_read else ""
         await msg.stream_token(
-            f"\n\n*tokens: {usage.get('inputTokens', 0):,} in / "
-            f"{usage.get('outputTokens', 0):,} out*"
+            f"\n\n*tokens: {turn_in:,} in{cached_part} / {turn_out:,} out"
+            f" · session: {totals['in']:,} in / {totals['out']:,} out*"
         )
     await msg.send()
