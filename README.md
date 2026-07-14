@@ -24,13 +24,22 @@ local disk) except the model API calls to your own AWS account.
 
 ## Setup
 
-Prereqs: Python 3.13 (not 3.14 — Chainlit has an open event-loop bug there),
-AWS CLI configured with credentials that can call Bedrock
-(`bedrock:ListFoundationModels`, `bedrock:ListInferenceProfiles`,
-`bedrock-runtime:Converse*`), and model access granted in the AWS console
-(Bedrock → Model access).
+Prereqs on every machine:
+
+- **Python 3.13** (not 3.14 — Chainlit has an open event-loop bug there).
+  - Windows: [python.org](https://www.python.org/downloads/) installer
+  - macOS: `brew install python@3.13`
+  - Ubuntu / WSL: `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.13 python3.13-venv`
+- **AWS credentials** that can call Bedrock (`bedrock:ListFoundationModels`,
+  `bedrock:ListInferenceProfiles`, `bedrock-runtime:Converse*`): run
+  `aws configure` (or copy `~/.aws/credentials` from another machine), and
+  grant model access once per account in the AWS console (Bedrock → Model
+  access).
+
+### Windows (PowerShell)
 
 ```powershell
+git clone https://github.com/GormleyLab/bedrock-models.git && cd bedrock-models
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 copy .env.example .env
@@ -38,19 +47,44 @@ copy .env.example .env
 # edit .env: set APP_USERNAME / APP_PASSWORD (your local login)
 ```
 
+### macOS / Linux / WSL (bash or zsh)
+
+```bash
+git clone https://github.com/GormleyLab/bedrock-models.git && cd bedrock-models
+python3.13 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env
+.venv/bin/chainlit create-secret   # paste output into .env
+# edit .env: set APP_USERNAME / APP_PASSWORD (your local login)
+```
+
 ## Run
+
+Windows:
 
 ```powershell
 .\.venv\Scripts\chainlit run app.py
 ```
 
+macOS / Linux / WSL:
+
+```bash
+.venv/bin/chainlit run app.py
+```
+
 Open http://localhost:8000, log in with the credentials from `.env`, pick a
-model in the settings panel (⚙️), and chat.
+model in the settings panel (⚙️), and chat. Under WSL2, the server is
+reachable from your Windows browser at the same http://localhost:8000 URL.
 
 ## Notes
 
 - Chat history lives in `data/chainlit.db`; uploaded files in `data/uploads/`
-  (model context) and `public/uploads/` (UI display). All are gitignored.
+  (model context) and `public/uploads/` (UI display). All are gitignored —
+  each machine keeps its own history; conversations don't sync between
+  computers.
+- `.env` is also gitignored, so create it (and a fresh `chainlit
+  create-secret`) on each machine. The AWS region defaults to `us-east-1`;
+  override with `AWS_DEFAULT_REGION` in `.env` if needed.
 - Full conversation context — including images/documents — is re-sent to the
   model on every turn (the Converse API is stateless). On Claude models,
   prompt caching offsets most of that cost; the cache expires after ~5
