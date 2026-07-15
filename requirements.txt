@@ -1,4 +1,5 @@
 chainlit>=2.11.1,<3
 boto3>=1.40
 SQLAlchemy>=2.0,<3
+greenlet>=3.0          # required by SQLAlchemy's async engine; not always auto-installed on macOS/py3.13
 aiosqlite>=0.20
