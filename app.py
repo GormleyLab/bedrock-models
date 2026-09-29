@@ -114,7 +114,7 @@ async def _send_settings(selected: Optional[str] = None) -> Dict[str, Any]:
                 description="[img] = accepts images, [doc] = accepts documents",
             ),
             Slider(id="temperature", label="Temperature", initial=0.5, min=0, max=1, step=0.1),
-            Slider(id="max_tokens", label="Max response tokens", initial=4096, min=256, max=8192, step=256),
+            Slider(id="max_tokens", label="Max response tokens", initial=16384, min=1024, max=32768, step=1024),
             TextInput(id="system_prompt", label="System prompt (optional)", initial=""),
         ]
     ).send()
@@ -293,7 +293,7 @@ async def on_message(message: cl.Message):
     )
     bedrock.apply_cache_point(model, messages)
 
-    max_tokens = int(settings.get("max_tokens") or 4096)
+    max_tokens = int(settings.get("max_tokens") or 16384)
     temperature = float(settings.get("temperature") if settings.get("temperature") is not None else 0.5)
     system_prompt = (settings.get("system_prompt") or "").strip() or None
 
@@ -304,6 +304,7 @@ async def on_message(message: cl.Message):
     msg.parent_id = None
     reply_text = ""
     usage: Optional[Dict[str, int]] = None
+    stop_reason: Optional[str] = None
 
     try:
         if model.streaming:
@@ -315,6 +316,8 @@ async def on_message(message: cl.Message):
                     if delta:
                         reply_text += delta
                         await msg.stream_token(delta)
+                elif "messageStop" in event:
+                    stop_reason = event["messageStop"].get("stopReason")
                 elif "metadata" in event:
                     usage = event["metadata"].get("usage")
         else:
@@ -325,6 +328,7 @@ async def on_message(message: cl.Message):
                 if "text" in block:
                     reply_text += block["text"]
             usage = resp.get("usage")
+            stop_reason = resp.get("stopReason")
             await msg.stream_token(reply_text)
     except ClientError as e:
         history.pop()  # keep history consistent with what the model has seen
@@ -343,7 +347,22 @@ async def on_message(message: cl.Message):
         await msg.send()
         return
 
-    history.append({"role": "assistant", "content": [{"text": reply_text}]})
+    if stop_reason == "max_tokens":
+        # Reasoning models (e.g. Claude Opus 5.5) spend output tokens on
+        # thinking that isn't streamed as text, so the budget can run out
+        # before any visible reply
+        await msg.stream_token(
+            ("\n\n" if reply_text else "")
+            + f"⚠️ Hit the {max_tokens:,}-token response limit"
+            + ("" if reply_text else " before the model produced any text (it was likely still reasoning)")
+            + " — raise *Max response tokens* in the settings panel and try again."
+        )
+    if not reply_text:
+        # Nothing usable to keep; drop the user turn so the next try
+        # doesn't send two consecutive user messages
+        history.pop()
+    else:
+        history.append({"role": "assistant", "content": [{"text": reply_text}]})
     cl.user_session.set("history", history)
 
     if usage:
