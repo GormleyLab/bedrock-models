@@ -357,6 +357,15 @@ async def on_message(message: cl.Message):
             + ("" if reply_text else " before the model produced any text (it was likely still reasoning)")
             + " — raise *Max response tokens* in the settings panel and try again."
         )
+    elif stop_reason in ("content_filtered", "guardrail_intervened"):
+        # Safety filters can false-positive on benign prompts, and some models
+        # filter more strictly than others (e.g. Claude Opus 5.5)
+        await msg.stream_token(
+            ("\n\n" if reply_text else "")
+            + f"⚠️ *{model.display_name}* stopped the response (`{stop_reason}`)"
+            + ("" if reply_text else " before producing any text")
+            + ". This can be a false positive — try rephrasing, or switch to another model."
+        )
     if not reply_text:
         # Nothing usable to keep; drop the user turn so the next try
         # doesn't send two consecutive user messages
