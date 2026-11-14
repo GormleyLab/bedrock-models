@@ -97,22 +97,7 @@ reachable from your Windows browser at the same http://localhost:8000 URL.
 
 ## Agent configuration
 
-[AGENTS.md](AGENTS.md) contains the authoritative project instructions;
-`CLAUDE.md` imports it for Claude Code. Keep tool-specific settings in `.claude/`.
-Repository development skills, when added, belong in `.agents/skills/`;
-`.claude/skills/` and `.agents/skills-sync-manifest.json` are generated and
-should be committed together with the canonical skills. For the first sync,
-review and make both skill trees identical before running `--write`. No
-repository skills or manifest are currently needed.
-
-Run from the repository root after configuration changes:
-
-```bash
-.venv/bin/python -m unittest discover -s scripts -p test_sync_agent_config.py
-.venv/bin/python scripts/sync_agent_config.py --write
-.venv/bin/python scripts/sync_agent_config.py --check
-```
-
-On Windows, replace `.venv/bin/python` with `.venv\Scripts\python`.
-Do not edit generated skill mirrors directly. GitHub Actions runs the regression
-tests and configuration check on pull requests and pushes to `main`.
+[AGENTS.md](AGENTS.md) holds the project instructions for coding agents;
+`CLAUDE.md` just imports it for Claude Code. See its "Agent configuration"
+section for the skill-sync workflow and checks, which GitHub Actions also runs
+on pull requests and pushes to `main`.

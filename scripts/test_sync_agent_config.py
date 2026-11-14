@@ -9,7 +9,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts import sync_agent_config as sync
+try:
+    from scripts import sync_agent_config as sync
+except ImportError:  # run from inside scripts/
+    import sync_agent_config as sync
 
 
 class SyncAgentConfigTests(unittest.TestCase):
@@ -102,3 +105,60 @@ class SyncAgentConfigTests(unittest.TestCase):
     def test_check_rejects_non_wrapper_claude_md(self):
         (self.root / "CLAUDE.md").write_text("@AGENTS.md\nExtra instructions\n")
         self.assertTrue(any("must contain exactly" in error for error in sync.check(self.root)))
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_write_keeps_git_ignored_files_in_mirror(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".gitignore").write_text(".claude/skills/personal/\n")
+        self.make_skill()
+        personal = self.root / ".claude/skills/personal/SKILL.md"
+        personal.parent.mkdir(parents=True)
+        personal.write_text("Mine\n")
+        (self.root / ".agents/skills/demo/SKILL.md").write_text("Updated\n")
+        self.assertEqual(sync.write(self.root), [])
+        self.assertEqual(personal.read_text(), "Mine\n")
+        self.assertEqual((self.root / ".claude/skills/demo/SKILL.md").read_text(), "Updated\n")
+        self.assertEqual(sync.check(self.root), [])
+
+    def test_write_removes_deleted_skills_but_keeps_unmanaged_files(self):
+        self.make_skill()
+        cache = self.root / ".claude/skills/demo/__pycache__/x.pyc"
+        cache.parent.mkdir()
+        cache.write_bytes(b"cache")
+        shutil.rmtree(self.root / ".agents/skills/demo")
+        (self.root / ".agents/skills/other").mkdir()
+        (self.root / ".agents/skills/other/SKILL.md").write_text("Other\n")
+        self.assertEqual(sync.write(self.root), [])
+        self.assertFalse((self.root / ".claude/skills/demo/SKILL.md").exists())
+        self.assertTrue(cache.exists())
+        self.assertTrue((self.root / ".claude/skills/other/SKILL.md").exists())
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_write_refuses_to_overwrite_unmanaged_mirror_file(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".gitignore").write_text(".claude/skills/demo/extra.md\n")
+        self.make_skill()
+        unmanaged = self.root / ".claude/skills/demo/extra.md"
+        unmanaged.write_text("Local\n")
+        (self.root / ".agents/skills/demo/extra.md").write_text("Canonical\n")
+        self.assertTrue(any("unmanaged" in error for error in sync.write(self.root)))
+        self.assertEqual(unmanaged.read_text(), "Local\n")
+
+    def test_dot_claude_claude_md_is_allowed(self):
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude/CLAUDE.md").write_text("Claude-only notes\n")
+        self.assertEqual(sync.check(self.root), [])
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_git_ignored_claude_md_is_not_checked(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".gitignore").write_text("data/\n")
+        (self.root / "data").mkdir()
+        (self.root / "data/CLAUDE.md").write_text("Not ours\n")
+        self.assertEqual(sync.check(self.root), [])
+
+    def test_nested_claude_md_still_checked(self):
+        (self.root / "sub").mkdir()
+        (self.root / "sub/CLAUDE.md").write_text("Inline instructions\n")
+        errors = sync.check(self.root)
+        self.assertTrue(any("sub/CLAUDE.md: missing neighboring" in error for error in errors))

@@ -3,11 +3,7 @@
 AGENTS.md and .agents/skills are canonical.  CLAUDE.md is only an import
 wrapper, while .claude/skills is a generated mirror for Claude Code's skill
 discovery.  The script deliberately refuses to overwrite unexpected edits in
-either generated location.
-
-The master copy lives in geppetto-ecosystem/scripts/.  Geppetto, Pinocchio and
-geppetto-experiment-designer carry identical copies: change it there first and
-copy it across, together with its tests.
+either generated location, and never deletes mirror files it did not write.
 """
 
 from __future__ import annotations
@@ -15,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -107,14 +104,44 @@ def snapshot(directory: Path) -> dict[str, str]:
     return result
 
 
+def claude_md_files(root: Path) -> list[Path]:
+    """CLAUDE.md files that need a neighboring AGENTS.md.
+
+    Inside a git work tree only tracked and unignored files count, so the result
+    matches a clean CI checkout and large ignored directories are never walked.
+    ``.claude/CLAUDE.md`` is a Claude Code-specific location with no AGENTS.md
+    counterpart, so it is left alone.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=root,
+            capture_output=True,
+            check=True,
+        )
+        names = result.stdout.decode("utf-8", "surrogateescape").split("\0")
+        candidates = {root / name for name in names if name and Path(name).name == "CLAUDE.md"}
+    except (OSError, subprocess.CalledProcessError):
+        candidates = set()
+        for directory, dirnames, filenames in os.walk(root):
+            dirnames[:] = [name for name in dirnames if name not in IGNORED_DIRS]
+            if "CLAUDE.md" in filenames:
+                candidates.add(Path(directory) / "CLAUDE.md")
+    return sorted(
+        path
+        for path in candidates
+        if path.is_file()
+        and path.parent.name != ".claude"
+        and not any(part in IGNORED_DIRS for part in path.relative_to(root).parts)
+    )
+
+
 def instruction_errors(root: Path) -> list[str]:
     errors: list[str] = []
     if not (root / "CLAUDE.md").is_file():
         errors.append("CLAUDE.md: missing required compatibility import '@AGENTS.md'")
-    for path in sorted(root.rglob("CLAUDE.md")):
+    for path in claude_md_files(root):
         relative = path.relative_to(root)
-        if any(part in IGNORED_DIRS for part in relative.parts):
-            continue
         agents_path = path.with_name("AGENTS.md")
         if not agents_path.is_file():
             errors.append(f"{relative}: missing neighboring AGENTS.md")
@@ -165,6 +192,17 @@ def check(root: Path) -> list[str]:
     return instruction_errors(root) + skill_errors(root)
 
 
+def remove_managed(mirror_dir: Path, managed: dict[str, str]) -> None:
+    """Delete the managed mirror files, then any directories left empty."""
+    for name in managed:
+        path = mirror_dir / name
+        path.unlink()
+        parent = path.parent
+        while parent != mirror_dir.parent and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+
+
 def write(root: Path) -> list[str]:
     errors = instruction_errors(root)
     if errors:
@@ -189,19 +227,28 @@ def write(root: Path) -> list[str]:
             "changes to .agents/skills or restore the generated mirror first"
         ]
 
+    # Only files this script manages are replaced.  Anything else in the mirror
+    # (git-ignored personal skills, caches) is left in place, and a canonical
+    # file that would land on top of one is refused rather than overwritten.
+    collisions = sorted(
+        name for name in canonical if name not in mirror and (mirror_dir / name).exists()
+    )
+    if collisions:
+        return [
+            "refusing to overwrite unmanaged files in .claude/skills: " + ", ".join(collisions)
+        ]
+    remove_managed(mirror_dir, mirror)
+
     if canonical_dir.is_dir():
-        if mirror_dir.exists():
-            shutil.rmtree(mirror_dir)
         shutil.copytree(
             canonical_dir,
             mirror_dir,
             ignore=copy_filter(git_ignored(canonical_dir)),
+            dirs_exist_ok=True,
         )
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps(canonical, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     else:
-        if mirror_dir.exists():
-            shutil.rmtree(mirror_dir)
         if manifest_path.exists():
             manifest_path.unlink()
     return []
