@@ -4,6 +4,10 @@ AGENTS.md and .agents/skills are canonical.  CLAUDE.md is only an import
 wrapper, while .claude/skills is a generated mirror for Claude Code's skill
 discovery.  The script deliberately refuses to overwrite unexpected edits in
 either generated location, and never deletes mirror files it did not write.
+
+The master copy lives in geppetto-ecosystem/scripts/.  Geppetto, Pinocchio and
+geppetto-experiment-designer carry identical copies: change it there first and
+copy it across, together with its tests.
 """
 
 from __future__ import annotations
@@ -203,6 +207,34 @@ def remove_managed(mirror_dir: Path, managed: dict[str, str]) -> None:
             parent = parent.parent
 
 
+def stage_canonical(canonical_dir: Path, mirror_dir: Path) -> Path:
+    """Copy the canonical skills to a sibling staging directory.
+
+    Nothing in the mirror changes until this copy has succeeded, so a failed
+    copy leaves the mirror matching the manifest and a retry of --write is not
+    refused.
+    """
+    staging = mirror_dir.with_name(mirror_dir.name + ".sync-tmp")
+    if staging.exists():
+        shutil.rmtree(staging)
+    try:
+        shutil.copytree(canonical_dir, staging, ignore=copy_filter(git_ignored(canonical_dir)))
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return staging
+
+
+def move_staged(staging: Path, mirror_dir: Path) -> None:
+    """Move every staged file into the mirror (renames on one filesystem), then drop staging."""
+    for path in sorted(staging.rglob("*")):
+        if path.is_file():
+            target = mirror_dir / path.relative_to(staging)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(path, target)
+    shutil.rmtree(staging, ignore_errors=True)
+
+
 def write(root: Path) -> list[str]:
     errors = instruction_errors(root)
     if errors:
@@ -216,7 +248,8 @@ def write(root: Path) -> list[str]:
     manifest = load_manifest(manifest_path)
 
     if manifest is None:
-        if mirror != canonical:
+        # An empty or missing mirror has nothing to lose: let the first sync create it.
+        if mirror and mirror != canonical:
             return [
                 "refusing initial sync because .claude/skills and .agents/skills differ; "
                 "review the differences and make them identical first"
@@ -230,22 +263,14 @@ def write(root: Path) -> list[str]:
     # Only files this script manages are replaced.  Anything else in the mirror
     # (git-ignored personal skills, caches) is left in place, and a canonical
     # file that would land on top of one is refused rather than overwritten.
-    collisions = sorted(
-        name for name in canonical if name not in mirror and (mirror_dir / name).exists()
-    )
+    collisions = sorted(name for name in canonical if name not in mirror and (mirror_dir / name).exists())
     if collisions:
-        return [
-            "refusing to overwrite unmanaged files in .claude/skills: " + ", ".join(collisions)
-        ]
+        return ["refusing to overwrite unmanaged files in .claude/skills: " + ", ".join(collisions)]
+    staging = stage_canonical(canonical_dir, mirror_dir) if canonical_dir.is_dir() else None
     remove_managed(mirror_dir, mirror)
 
-    if canonical_dir.is_dir():
-        shutil.copytree(
-            canonical_dir,
-            mirror_dir,
-            ignore=copy_filter(git_ignored(canonical_dir)),
-            dirs_exist_ok=True,
-        )
+    if staging is not None:
+        move_staged(staging, mirror_dir)
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps(canonical, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     else:

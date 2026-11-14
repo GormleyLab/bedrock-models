@@ -162,3 +162,48 @@ class SyncAgentConfigTests(unittest.TestCase):
         (self.root / "sub/CLAUDE.md").write_text("Inline instructions\n")
         errors = sync.check(self.root)
         self.assertTrue(any("sub/CLAUDE.md: missing neighboring" in error for error in errors))
+
+    def test_first_skill_creates_mirror_and_manifest(self):
+        canonical = self.root / ".agents/skills/demo"
+        canonical.mkdir(parents=True)
+        (canonical / "SKILL.md").write_text("Demo\n")
+        self.assertEqual(sync.write(self.root), [])
+        self.assertEqual((self.root / ".claude/skills/demo/SKILL.md").read_text(), "Demo\n")
+        self.assertTrue((self.root / ".agents/skills-sync-manifest.json").is_file())
+        self.assertEqual(sync.check(self.root), [])
+
+    def test_initial_sync_refuses_differing_existing_mirror(self):
+        for location, text in ((".agents", "Demo\n"), (".claude", "Claude-only\n")):
+            directory = self.root / location / "skills/demo"
+            directory.mkdir(parents=True)
+            (directory / "SKILL.md").write_text(text)
+        self.assertTrue(sync.write(self.root))
+        self.assertEqual((self.root / ".claude/skills/demo/SKILL.md").read_text(), "Claude-only\n")
+
+    def test_claude_md_in_ignored_dirs_is_skipped(self):
+        nested = self.root / "node_modules/pkg"
+        nested.mkdir(parents=True)
+        (nested / "CLAUDE.md").write_text("Not a wrapper\n")
+        self.assertEqual(sync.check(self.root), [])
+
+    def test_failed_copy_leaves_previous_mirror_and_allows_retry(self):
+        canonical = self.make_skill("Version 1\n")
+        (canonical / "SKILL.md").write_text("Version 2\n")
+        original_copytree = sync.shutil.copytree
+
+        def failing_copytree(*args, **kwargs):
+            raise OSError("simulated copy failure")
+
+        sync.shutil.copytree = failing_copytree
+        try:
+            with self.assertRaises(OSError):
+                sync.write(self.root)
+        finally:
+            sync.shutil.copytree = original_copytree
+
+        mirror = self.root / ".claude/skills/demo/SKILL.md"
+        self.assertEqual(mirror.read_text(), "Version 1\n")
+        self.assertFalse((self.root / ".claude/skills.sync-tmp").exists())
+        self.assertEqual(sync.write(self.root), [])
+        self.assertEqual(mirror.read_text(), "Version 2\n")
+        self.assertFalse((self.root / ".claude/skills.sync-tmp").exists())
