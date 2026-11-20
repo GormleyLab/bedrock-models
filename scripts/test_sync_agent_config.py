@@ -162,6 +162,20 @@ class SyncAgentConfigTests(unittest.TestCase):
         (self.root / "sub/CLAUDE.md").write_text("Inline instructions\n")
         errors = sync.check(self.root)
         self.assertTrue(any("sub/CLAUDE.md: missing neighboring" in error for error in errors))
+        self.assertTrue(any("sub/CLAUDE.md: must contain exactly" in error for error in errors))
+        self.assertTrue(all("\\" not in error for error in errors))
+
+        # All instruction diagnostics use the same portable relative path.
+        (self.root / "sub/AGENTS.md").write_text("Scoped instructions\n")
+        errors = sync.instruction_errors(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("sub/CLAUDE.md: must contain exactly"))
+
+        (self.root / "sub/CLAUDE.md").write_bytes(b"\xff")
+        self.assertEqual(
+            sync.instruction_errors(self.root),
+            ["sub/CLAUDE.md: must be UTF-8 text"],
+        )
 
     def test_first_skill_creates_mirror_and_manifest(self):
         canonical = self.root / ".agents/skills/demo"

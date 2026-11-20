@@ -145,7 +145,7 @@ def instruction_errors(root: Path) -> list[str]:
     if not (root / "CLAUDE.md").is_file():
         errors.append("CLAUDE.md: missing required compatibility import '@AGENTS.md'")
     for path in claude_md_files(root):
-        relative = path.relative_to(root)
+        relative = path.relative_to(root).as_posix()
         agents_path = path.with_name("AGENTS.md")
         if not agents_path.is_file():
             errors.append(f"{relative}: missing neighboring AGENTS.md")
